@@ -1,0 +1,27 @@
+[workspace]
+authors = ["tkt-gemini <tkt310505@gmail.com>"]
+channels = ["conda-forge"]
+name = "project-2"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+ipykernel = ">=7.1.0,<8"
+pandas = "*"
+numpy = "*"
+matplotlib = "*"
+seaborn = "*"
+wordcloud = "*"
+emoji = "*"
+spacy = "*"
+scikit-learn = "*"
+nltk = "*"
+empath = "*"
+textstat = "*"
+imbalanced-learn = "*"
+spacy-model-en_core_web_sm = "*"
+pynvim = ">=0.6.0,<0.7"
+jupyter_client = ">=8.8.0,<9"
