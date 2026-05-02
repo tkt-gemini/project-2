@@ -1,9 +1,12 @@
 [workspace]
 authors = ["tkt-gemini <tkt310505@gmail.com>"]
-channels = ["conda-forge"]
+channels = ["conda-forge", "pytorch", "nvidia"]
 name = "project-2"
 platforms = ["linux-64"]
 version = "0.1.0"
+
+[system-requirements]
+cuda = "12.8"
 
 [tasks]
 
@@ -20,13 +23,20 @@ wordcloud = "*"
 emoji = "*"
 empath = "*"
 spacy = "*"
+spacy-model-en_core_web_md = "*"
 seaborn = "*"
 scikit-learn = "*"
-spacy-model-en_core_web_sm = "*"
 streamlit = ">=1.30.0"
 textstat = "*"
 jupyter_client = ">=8.8.0,<9"
 joblib = "*"
+altair = ">=6.0.0,<7"
+stanza = ">=1.11.1,<2"
+pytorch = ">=2.10.0,<3"
+torchvision = ">=0.26.0,<0.27"
+torchaudio = ">=2.10.0,<3"
+lightgbm = ">=4.6.0,<5"
+optuna = ">=4.8.0,<5"
 
 [pypi-dependencies]
 contractions = "*"
