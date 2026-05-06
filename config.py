@@ -1,28 +1,24 @@
-"""
-pipeline/config.py — Global constants, paths, regex, and TrainingConfig.
-"""
 from __future__ import annotations
 
 import re
-import string
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 from sklearn.metrics import f1_score, make_scorer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-RAW_DATA_DIR    = "./archive/raw"
 CLEAN_CSV       = "./archive/train.csv"
-ARTIFACT_DIR    = Path("artifacts")
-ARTIFACT_MASKED = Path("artifacts/masked")
-ARTIFACT_CLEAN  = Path("artifacts/clean")
-CHECKPOINT_DIR  = Path("checkpoints")
+MODEL_DIR    = Path("./archive/model")
+MODEL_MASK   = Path(MODEL_DIR) / "masked"
+MODEL_CLEAN  = Path(MODEL_DIR) / "cleaned"
+# Cache
+CACHE_DIR       = Path("./archive/cache")
+CHECKPOINT_DIR  = Path(CACHE_DIR) / "checkpoint"
+PSYCH_CACHE_DIR = Path(CACHE_DIR) / "psych"
 
-for _d in [ARTIFACT_DIR, ARTIFACT_MASKED, ARTIFACT_CLEAN, CHECKPOINT_DIR]:
+for _d in [MODEL_DIR, MODEL_MASK, MODEL_CLEAN, CACHE_DIR, CHECKPOINT_DIR, PSYCH_CACHE_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Training hyperparams ──────────────────────────────────────────────────────
@@ -41,12 +37,8 @@ MIN_WORDS      = 10
 MAX_URLS       = 2
 
 # ── Empath categories ─────────────────────────────────────────────────────────
-try:
-    with open("archive/psych-categories.csv", "r", encoding="utf-8") as _f:
-        PSYCH_CATS = [ln.strip() for ln in _f if ln.strip()]
-except FileNotFoundError:
-    PSYCH_CATS = []
-    print("  Warning: archive/psych-categories.csv not found. PSYCH_CATS is empty.")
+with open("./archive/psych-categories.csv", "r", encoding="utf-8") as f:
+    PSYCH_CATS = [ln.strip() for ln in f if ln.strip()]
 
 # ── Label constants ───────────────────────────────────────────────────────────
 CONTROL_LABELS = [
@@ -100,7 +92,7 @@ MH_KEYWORDS: list[str] = [
     "r/healthanxiety", "r/lonely",
 ]
 
-_MH_PATTERN = re.compile(
+MH_PATTERN = re.compile(
     r"\b(" + "|".join(re.escape(k) for k in MH_KEYWORDS) + r")\b",
     re.IGNORECASE,
 )
@@ -108,8 +100,8 @@ _MH_PATTERN = re.compile(
 # ── Regex patterns ────────────────────────────────────────────────────────────
 FIRST_PERSON_PRONOUNS = {"i", "me", "my", "myself", "mine"}
 
-_BOT_RE = re.compile(r"bot$|_bot$|^bot_|automod|automoderator", re.IGNORECASE)
-_MOD_RE = re.compile(
+BOT_RE = re.compile(r"bot$|_bot$|^bot_|automod|automoderator", re.IGNORECASE)
+MOD_RE = re.compile(
     r"weekly\s+(thread|check.?in|discussion)"
     r"|daily\s+(thread|check.?in|discussion)"
     r"|monthly\s+(thread|check.?in|discussion)"
@@ -117,10 +109,8 @@ _MOD_RE = re.compile(
     r"|megathread|resource\s+(thread|list|post)",
     re.IGNORECASE,
 )
-_URL_RE = re.compile(r"https?://\S+|www\.\S+")
 
-# [H1 FIX] positive patterns TRƯỚC exclusion
-_FP_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
+FP_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
     r"\bI\b.{0,60}\b(was|have been|got|am|were)\b.{0,40}\bdiagnosed\b",
     r"\bI\b.{0,60}\bhave\b.{0,40}\b(disorder|condition|illness)\b",
     r"\bI\b.{0,50}\b(feel|felt|feeling|been feeling)\b",
@@ -134,7 +124,7 @@ _FP_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
     r"\bmy\b.{0,40}\b(life|mind|brain|thoughts|head|body|therapist|doctor|medication)\b",
     r"\b(help me|need help|anyone else|does anyone|can anyone)\b",
 ]]
-_EXCL_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
+EXCL_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
     r"\bmy\s+(mom|dad|mother|father|brother|sister|son|daughter|friend|partner"
     r"|spouse|husband|wife|boyfriend|girlfriend|colleague|coworker)\b"
     r".{0,60}\b(has|have|was|diagnosed|struggling|suffering)\b",
@@ -144,19 +134,3 @@ _EXCL_COMPILED = [re.compile(p, re.IGNORECASE) for p in [
     r"\b(article|study|research|paper|news|published)\b.{0,60}\b(found|shows|suggests)\b",
     r"\bhow\s+to\s+(help|support|talk to)\b.{0,40}\b(someone|person|friend|family)\b",
 ]]
-
-
-# ── TrainingConfig dataclass ──────────────────────────────────────────────────
-@dataclass
-class TrainingConfig:
-    data_csv      : str  = CLEAN_CSV
-    search        : str  = "grid"
-    optuna_trials : int  = 50
-    tfidf_feats   : int  = TFIDF_FEATS
-    select_k      : int  = SELECT_K
-    cap           : int  = TIER1_CAP
-    no_undersample: bool = False
-
-    @property
-    def fe_kwargs(self) -> dict:
-        return {"tfidf_feats": self.tfidf_feats, "select_k": self.select_k}

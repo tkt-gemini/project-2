@@ -5,8 +5,5 @@
 .vscode/*
 # data
 archive/*
-checkpoints/*
-models/*
-artifacts/*
 # python cache
 __pycache__/*

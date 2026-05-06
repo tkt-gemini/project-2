@@ -20,7 +20,7 @@ import pipeline
 
 # ── Joblib unpickle fix ───────────────────────────────────────────────────────
 # Ép class vào __main__ để joblib giải nén đúng khi chạy qua Streamlit
-__main__.PsychologicalExtractor  = pipeline.PsychologicalExtractor
+__main__.PsychologicalExtractor  = pipeline.FeatureExtractor
 __main__.FeatureEngineer         = pipeline.FeatureEngineer
 __main__.MentalHealthClassifier  = pipeline.MentalHealthClassifier
 __main__.NRCLex                  = pipeline.NRCLex
@@ -39,8 +39,8 @@ st.set_page_config(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 VARIANT_DIRS = {
-    "masked": pipeline.ARTIFACT_MASKED,
-    "clean" : pipeline.ARTIFACT_CLEAN,
+    "masked": pipeline.MODEL_MASK,
+    "clean" : pipeline.MODEL_CLEAN,
 }
 
 VARIANT_LABELS = {

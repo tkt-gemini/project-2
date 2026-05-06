@@ -1,4 +1,4 @@
-# <img src="figs/logo.png" width="75"> Project 2 - UTEHY
+# <img src="img/logo.png" width="75"> Project 2 - UTEHY
 
 ## Intro
 
