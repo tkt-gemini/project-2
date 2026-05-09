@@ -1,4 +1,3 @@
-import hashlib
 import json
 import pickle
 import re
@@ -10,17 +9,14 @@ from pathlib import Path
 import contractions
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 import spacy
 from empath import Empath
-from joblib import Memory
 from nltk.sentiment import SentimentIntensityAnalyzer
 from sklearn.base import BaseEstimator, TransformerMixin
 from tqdm import tqdm
 
 from config import *
-
-memory = Memory(location=PSYCH_CACHE_DIR, verbose=0)
-_PSYCH_CATS_HASH: str = hashlib.md5("|".join(PSYCH_CATS).encode()).hexdigest()
 
 
 class Filter:
@@ -360,13 +356,11 @@ class Psychological(BaseEstimator, TransformerMixin):
         return [count.get(p, 0) / n for p in self.__LINGUI]
 
     def fit(self, X, y=None):
+        self.is_fitted_ = True
         return self
 
-    # FIX: Added _cats_hash parameter so joblib's cache key incorporates the
-    # active Empath category list. If psych-categories.csv is edited between
-    # runs the old cached array is automatically invalidated and recomputed.
-    @memory.cache(ignore=["self"])
-    def __cached_extract(self, texts: list[str], _cats_hash: str = "") -> np.ndarray:
+    def transform(self, X):
+        texts = ["" if pd.isna(x) else str(x) for x in X]
         features = []
         for text, doc in tqdm(
             zip(texts, self.nlp.pipe(texts, batch_size=self.batch_size)),
@@ -382,15 +376,21 @@ class Psychological(BaseEstimator, TransformerMixin):
                 + [empath.get(cat, 0.0) for cat in PSYCH_CATS]
                 + self.nrc.getlist(text)
             )
-        return np.array(features)
 
-    def transform(self, X):
-        texts = ["" if pd.isna(x) else str(x) for x in X]
-        result = self.__cached_extract(self, texts, _PSYCH_CATS_HASH)
+        result = np.array(features)
 
         if len(self.fnames) != result.shape[1]:
             raise ValueError(
-                f"Feature name mismatch: {len(self.fnames)} names "
-                f"but {result.shape[1]} columns in output array."
+                f"Feature name mismatch: {len(self.fnames)} names but {result.shape[1]} columns in output array."
             )
+
         return result
+
+
+class DenseToSparse(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        self.is_fitted_ = True
+        return self
+
+    def transform(self, X):
+        return sp.csr_matrix(X)

@@ -8,15 +8,16 @@ from sklearn.metrics import f1_score, make_scorer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
+VERSION = "v1.0.0"
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CLEAN_CSV = "./archive/train.csv"
-ARTIFACT_DIR = Path("./archive/model")
-ARTIFACT_MASK = Path(ARTIFACT_DIR) / "masked"
-ARTIFACT_CLEAN = Path(ARTIFACT_DIR) / "cleaned"
-# Cache
+ARTIFACT_DIR = Path(f"./archive/{VERSION}")
+ARTIFACT_MASK = Path(f"{ARTIFACT_DIR}/masked")
+ARTIFACT_CLEAN = Path(f"{ARTIFACT_DIR}/cleaned")
 CACHE_DIR = Path("./archive/cache")
-CHECKPOINT_DIR = Path(CACHE_DIR) / "checkpoint"
-PSYCH_CACHE_DIR = Path(CACHE_DIR) / "psych"
+CHECKPOINT_DIR = Path(f"{CACHE_DIR}/checkpoint")
+PSYCH_CACHE_DIR = Path(f"{CACHE_DIR}/psych")
 
 for _d in [
     ARTIFACT_DIR,
@@ -31,7 +32,7 @@ for _d in [
 # ── Training hyperparams ──────────────────────────────────────────────────────
 RANDOM_SEED = 42
 TEST_SIZE = 0.15
-CV_FOLDS = 5
+CV_FOLDS = 3
 TFIDF_FEATS = 60_000
 SELECT_K = 32_000
 TIER1_CAP = 30_000
@@ -227,3 +228,10 @@ EXCL_COMPILED = [
         r"\bhow\s+to\s+(help|support|talk to)\b.{0,40}\b(someone|person|friend|family)\b",
     ]
 ]
+
+MODEL_FILE_MAP = {
+    "LinearSVC": ("model_svc.pkl", "inference_pipeline_svc.pkl"),
+    "LogisticRegression": ("model_lr.pkl", "inference_pipeline_lr.pkl"),
+}
+
+DIMENSIONALITY = 1000

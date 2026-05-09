@@ -37,6 +37,7 @@ torchvision = ">=0.26.0,<0.27"
 torchaudio = ">=2.10.0,<3"
 lightgbm = ">=4.6.0,<5"
 optuna = ">=4.8.0,<5"
+plotly = ">=6.6.0,<7"
 
 [pypi-dependencies]
 contractions = "*"
