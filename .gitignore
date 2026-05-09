@@ -5,5 +5,7 @@
 .vscode/*
 # data
 archive/*
+!archive/nrc/
+!archive/psych-categories.csv
 # python cache
 __pycache__/*
