@@ -8,7 +8,8 @@ from sklearn.metrics import f1_score, make_scorer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-VERSION = "v1.0.0"
+# VERSION = "v1.0.0"
+VERSION = "v1.0.1"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CLEAN_CSV = "./archive/train.csv"
