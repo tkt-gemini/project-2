@@ -16,8 +16,7 @@ from sklearn.preprocessing import LabelEncoder, MaxAbsScaler, StandardScaler
 from sklearn.svm import LinearSVC
 
 from config import (
-    ARTIFACT_CLEAN,
-    ARTIFACT_MASK,
+    ARTIFACT_DIR,
     CV_FOLDS,
     LABEL_MAPPING,
     MODEL_FILE_MAP,
@@ -47,15 +46,12 @@ print("Label encoding mapping:")
 for idx, label in enumerate(le.classes_):
     print(f"  {idx}: {label}")
 
-X_cleaned_train, X_cleaned_test, X_masked_train, X_masked_test, y_train, y_test = (
-    train_test_split(
-        df["post_cleaned"],
-        df["post_masked"],
-        df["_subreddit"],
-        test_size=TEST_SIZE,
-        stratify=df["_subreddit"],
-        random_state=RANDOM_SEED,
-    )
+X_train, X_test, y_train, y_test = train_test_split(
+    df["post_cleaned"],
+    df["_subreddit"],
+    test_size=TEST_SIZE,
+    stratify=df["_subreddit"],
+    random_state=RANDOM_SEED,
 )
 
 
@@ -210,77 +206,70 @@ idx_2d = np.array(y_train.index).reshape(-1, 1)
 idx_resampled_2d, y_resampled = rus.fit_resample(idx_2d, y_train)
 idx_resampled = idx_resampled_2d.flatten()
 
-X_cleaned_train_res = X_cleaned_train.loc[idx_resampled]
-X_masked_train_res = X_masked_train.loc[idx_resampled]
+X_train_res = X_train.loc[idx_resampled]
 
-run_configs = [
-    ("CLEANED", X_cleaned_train_res, X_cleaned_test, ARTIFACT_CLEAN),
-    ("MASKED", X_masked_train_res, X_masked_test, ARTIFACT_MASK),
-]
+print(f"\n{'=' * 50}\nPIPELINE\n{'=' * 50}")
 
-for data_type, X_train_res, X_test, out_dir in run_configs:
-    print(f"\n{'=' * 50}\nPIPELINE: {data_type}\n{'=' * 50}")
+print("[FEATURE ENGINEER]")
+fe = get_feature_engineer()
+print("Fitting...")
+fe.fit(X_train_res, y_resampled)
+X_transformed = fe.transform(X_train_res)
+print("Done!")
 
-    print("[FEATURE ENGINEER]")
-    fe = get_feature_engineer()
-    print(f"[{data_type}] Fitting...")
-    fe.fit(X_train_res, y_resampled)
-    X_transformed = fe.transform(X_train_res)
-    print("Done!")
+print("[MODEL]")
+trained_models = {
+    "LogisticRegression": None,
+    "LinearSVC": None,
+}
 
-    print("[MODEL]")
-    trained_models = {
-        "LogisticRegression": None,
-        "LinearSVC": None,
-    }
+for k in trained_models.keys():
+    trained_models[k] = tune_and_train(k, X_transformed, y_resampled)
 
-    for k in trained_models.keys():
-        trained_models[k] = tune_and_train(k, X_transformed, y_resampled)
+del X_transformed
+gc.collect()
 
-    del X_transformed
-    gc.collect()
+print("Evaluating on test set...")
+X_test_transformed = fe.transform(X_test)
 
-    print(f"\n[{data_type}] Evaluating on test set...")
-    X_test_transformed = fe.transform(X_test)
+report_text = "EVALUATION REPORT\n" + "=" * 50 + "\n"
 
-    report_text = f"EVALUATION REPORT — {data_type} DATA\n" + "=" * 50 + "\n"
+for model_name, model in trained_models.items():
+    y_pred = model.predict(X_test_transformed)
+    print(f"\n--- {model_name} ---")
+    clf_report = classification_report(y_test, y_pred, target_names=le.classes_)
+    print(clf_report)
+    report_text += f"\nModel: {model_name}\n{'-' * 30}\n{clf_report}\n"
 
-    for model_name, model in trained_models.items():
-        y_pred = model.predict(X_test_transformed)
-        print(f"\n--- {model_name} ({data_type}) ---")
-        clf_report = classification_report(y_test, y_pred, target_names=le.classes_)
-        print(clf_report)
-        report_text += f"\nModel: {model_name}\n{'-' * 30}\n{clf_report}\n"
+# ── Persist artefacts ─────────────────────────────────────────────────────
+print(f"Saving artefacts to {ARTIFACT_DIR}...")
 
-    # ── Persist artefacts ─────────────────────────────────────────────────────
-    print(f"[{data_type}] Saving artefacts to {out_dir}...")
+with open(ARTIFACT_DIR / "label_encoder.pkl", "wb") as fh:
+    pickle.dump(le, fh)
+with open(ARTIFACT_DIR / "feature_engineer.pkl", "wb") as fh:
+    pickle.dump(fe, fh)
 
-    with open(out_dir / "label_encoder.pkl", "wb") as fh:
-        pickle.dump(le, fh)
-    with open(out_dir / "feature_engineer.pkl", "wb") as fh:
-        pickle.dump(fe, fh)
+for model_name, model in trained_models.items():
+    model_file, pipeline_file = MODEL_FILE_MAP[model_name]
 
-    for model_name, model in trained_models.items():
-        model_file, pipeline_file = MODEL_FILE_MAP[model_name]
+    with open(ARTIFACT_DIR / model_file, "wb") as fh:
+        pickle.dump(model, fh)
 
-        with open(out_dir / model_file, "wb") as fh:
-            pickle.dump(model, fh)
+    inference_pipeline = Pipeline(
+        [
+            ("preprocessing", fe),
+            ("classifier", model),
+        ]
+    )
+    with open(ARTIFACT_DIR / pipeline_file, "wb") as fh:
+        pickle.dump(inference_pipeline, fh)
+    del inference_pipeline
 
-        inference_pipeline = Pipeline(
-            [
-                ("preprocessing", fe),
-                ("classifier", model),
-            ]
-        )
-        with open(out_dir / pipeline_file, "wb") as fh:
-            pickle.dump(inference_pipeline, fh)
-        del inference_pipeline
+with open(ARTIFACT_DIR / "evaluation_report.txt", "w", encoding="utf-8") as fh:
+    fh.write(report_text)
 
-    with open(out_dir / "evaluation_report.txt", "w", encoding="utf-8") as fh:
-        fh.write(report_text)
-
-    # ── Free RAM before next iteration ────────────────────────────────────────
-    del X_test_transformed, fe, trained_models
-    gc.collect()
+# ── Free RAM before next iteration ────────────────────────────────────────
+del X_test_transformed, fe, trained_models
+gc.collect()
 
 print("\n[FINISHED] All pipelines complete.")

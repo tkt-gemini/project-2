@@ -52,7 +52,7 @@ from sklearn.preprocessing import LabelEncoder, MaxAbsScaler
 from sklearn.svm import LinearSVC
 
 from config import (
-    ARTIFACT_CLEAN,
+    ARTIFACT_DIR,
     CACHE_DIR,
     CV_FOLDS,
     LABEL_MAPPING,
@@ -528,10 +528,10 @@ gc.collect()
 
 # ══ PHASE 9 — Persist artifacts ═══════════════════════════════════════════════
 print("\n" + "=" * 60)
-print(f"PHASE 9 — Saving artifacts to {ARTIFACT_CLEAN}")
+print(f"PHASE 9 — Saving artifacts to {ARTIFACT_DIR}")
 print("=" * 60)
 
-out = ARTIFACT_CLEAN
+out = ARTIFACT_DIR
 
 artifacts = {
     "label_encoder.pkl": le,

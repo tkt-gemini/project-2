@@ -14,16 +14,12 @@ VERSION = "v1.0.1"
 # ── Paths ─────────────────────────────────────────────────────────────────────
 CLEAN_CSV = "./archive/train.csv"
 ARTIFACT_DIR = Path(f"./archive/{VERSION}")
-ARTIFACT_MASK = Path(f"{ARTIFACT_DIR}/masked")
-ARTIFACT_CLEAN = Path(f"{ARTIFACT_DIR}/cleaned")
 CACHE_DIR = Path("./archive/cache")
 CHECKPOINT_DIR = Path(f"{CACHE_DIR}/checkpoint")
 PSYCH_CACHE_DIR = Path(f"{CACHE_DIR}/psych")
 
 for _d in [
     ARTIFACT_DIR,
-    ARTIFACT_MASK,
-    ARTIFACT_CLEAN,
     CACHE_DIR,
     CHECKPOINT_DIR,
     PSYCH_CACHE_DIR,
