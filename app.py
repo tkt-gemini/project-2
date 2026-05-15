@@ -1,477 +1,789 @@
-# -*- coding: utf-8 -*-
 """
-app.py - Streamlit demo for the Reddit Mental Health Classifier
-================================================================
-Loads the pre-trained inference pipelines produced by main.py and
-exposes a UI for classifying free-form text into 16 mental health
-categories.
-
-Usage:
-    streamlit run app.py
-
-Requirements:
-    - Models must already be trained with main.py
-    - All training dependencies must be installed (see requirements.txt)
-    - spaCy model: python -m spacy download en_core_web_md
+Streamlit Demo — Mental Health Text Classification
+Two-layer Stacking Ensemble (TF-IDF → LR + SVC + Psych → LightGBM)
 """
 
 import pickle
-import warnings
+import sys
 from pathlib import Path
 
-import nltk
-import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
-from scipy.special import softmax
 
-warnings.filterwarnings("ignore")
-nltk.download("vader_lexicon", quiet=True)
-
-
-# ── Page config (must be the FIRST Streamlit call) ────────────────────────────
+# ── Must set page config first ────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Mental Health Text Classifier",
+    page_title="MindScan AI — Mental Health Classifier",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# ── Inject CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-# ── Constants - mirrors config.py so app.py can run standalone ────────────────
-VERSION = "v1.0.0"
-ARTIFACT_CLEAN = Path(f"./archive/{VERSION}/cleaned")
-ARTIFACT_MASK = Path(f"./archive/{VERSION}/masked")
-
-MODEL_FILE_MAP = {
-    "LinearSVC": "inference_pipeline_svc.pkl",
-    "LogisticRegression": "inference_pipeline_lr.pkl",
+/* Global */
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp {
+    background: linear-gradient(160deg, #0a0a1a 0%, #0d1529 40%, #111827 100%);
 }
 
-# Human-readable names for each encoded label
-LABEL_DISPLAY: dict[str, str] = {
-    "adhd": "ADHD",
-    "alcohol_use_disorder": "Alcohol Use Disorder",
-    "autism_spectrum": "Autism Spectrum",
-    "bipolar_disorder": "Bipolar Disorder",
-    "borderline_personality": "Borderline Personality",
-    "eating_disorder": "Eating Disorder",
-    "generalized_anxiety": "Generalized Anxiety",
-    "illness_anxiety": "Illness Anxiety",
-    "major_depressive": "Major Depressive",
-    "non-mental": "Non-Mental Health",
-    "ptsd": "PTSD",
-    "schizophrenia": "Schizophrenia",
-    "social_anxiety": "Social Anxiety",
-    "social_isolation": "Social Isolation",
-    "substance_use_disorder": "Substance Use Disorder",
-    "suicidal_risk": "Suicidal Risk",
+/* Hero section */
+.hero {
+    text-align: center;
+    padding: 2rem 1rem 1rem;
+}
+.hero h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.5px;
+}
+.hero p {
+    color: #94a3b8;
+    font-size: 1.05rem;
+    font-weight: 400;
 }
 
-# Performance summary pulled from evaluation_report.txt
-MODEL_METRICS = {
-    ("Cleaned", "LinearSVC"): {"macro_f1": 0.62, "accuracy": 0.80},
-    ("Cleaned", "LogisticRegression"): {"macro_f1": 0.61, "accuracy": 0.79},
-    ("Masked", "LinearSVC"): {"macro_f1": 0.54, "accuracy": 0.76},
-    ("Masked", "LogisticRegression"): {"macro_f1": 0.53, "accuracy": 0.75},
+/* Glass card */
+.glass {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 1.5rem;
+    backdrop-filter: blur(12px);
+    margin-bottom: 1rem;
 }
 
-# High-recall classes that warrant extra caution even with low confidence
-CRISIS_LABELS = {"suicidal_risk"}
+/* Metric card */
+.metric-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 1.2rem;
+    text-align: center;
+}
+.metric-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.metric-card .label {
+    color: #64748b;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 0.3rem;
+}
 
-# Pre-written example posts to make the demo immediately usable
-EXAMPLE_POSTS = [
-    {
-        "label": "Major Depressive",
-        "text": (
-            "I've been feeling really low for months now. I can't get out of bed, "
-            "I don't enjoy anything anymore. It feels like there's no point to anything "
-            "and I'm just going through the motions every day. My friends have stopped "
-            "inviting me out because I always cancel anyway."
-        ),
+/* Result badge */
+.result-badge {
+    display: inline-block;
+    padding: 0.6rem 1.5rem;
+    border-radius: 50px;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: white;
+    margin: 0.5rem 0;
+}
+.badge-risk { background: linear-gradient(135deg, #ef4444, #f97316); }
+.badge-safe { background: linear-gradient(135deg, #10b981, #34d399); }
+.badge-moderate { background: linear-gradient(135deg, #f59e0b, #eab308); }
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: rgba(15,23,42,0.95) !important;
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Text area */
+.stTextArea textarea {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 12px !important;
+    color: #e2e8f0 !important;
+    font-size: 0.95rem !important;
+}
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.7rem 2rem !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+    transition: all 0.3s ease !important;
+    width: 100%;
+}
+.stButton > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 25px rgba(99,102,241,0.4) !important;
+}
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0.5rem;
+    background: transparent;
+}
+.stTabs [data-baseweb="tab"] {
+    background: rgba(255,255,255,0.04);
+    border-radius: 10px;
+    color: #94a3b8;
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 0.5rem 1.2rem;
+}
+.stTabs [aria-selected="true"] {
+    background: rgba(99,102,241,0.2) !important;
+    color: #a5b4fc !important;
+    border-color: rgba(99,102,241,0.4) !important;
+}
+
+/* Hide default header/footer */
+header[data-testid="stHeader"] { background: transparent; }
+footer { visibility: hidden; }
+
+/* Expander */
+.streamlit-expanderHeader {
+    background: rgba(255,255,255,0.03) !important;
+    border-radius: 10px !important;
+}
+
+/* Model switcher */
+.model-switcher {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+}
+.model-switcher .version-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    margin-left: 4px;
+}
+.tag-stacking { background: rgba(99,102,241,0.2); color: #a5b4fc; }
+.tag-flat { background: rgba(251,191,36,0.2); color: #fbbf24; }
+
+/* Radio buttons styling */
+.stRadio > div { gap: 0.3rem; }
+.stRadio label {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 8px !important;
+    padding: 0.4rem 0.8rem !important;
+    transition: all 0.2s ease !important;
+}
+.stRadio label:hover {
+    border-color: rgba(99,102,241,0.4) !important;
+    background: rgba(99,102,241,0.1) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Labels info ───────────────────────────────────────────────────────────────
+LABEL_INFO = {
+    "adhd": ("🔵", "ADHD", "Attention Deficit Hyperactivity Disorder"),
+    "alcohol_use_disorder": ("🟠", "Alcohol Use", "Alcohol Use Disorder"),
+    "autism_spectrum": ("🟣", "Autism", "Autism Spectrum Disorder"),
+    "bipolar_disorder": ("🔴", "Bipolar", "Bipolar Disorder"),
+    "borderline_personality": ("🟡", "BPD", "Borderline Personality Disorder"),
+    "eating_disorder": ("🟤", "Eating Disorder", "Eating Disorder"),
+    "generalized_anxiety": ("🟠", "Anxiety", "Generalized Anxiety Disorder"),
+    "illness_anxiety": ("⚪", "Health Anxiety", "Illness Anxiety Disorder"),
+    "major_depressive": ("🔵", "Depression", "Major Depressive Disorder"),
+    "non-mental": ("🟢", "Non-Mental", "No Mental Health Condition Detected"),
+    "ptsd": ("🔴", "PTSD", "Post-Traumatic Stress Disorder"),
+    "schizophrenia": ("🟣", "Schizophrenia", "Schizophrenia"),
+    "social_anxiety": ("🟡", "Social Anxiety", "Social Anxiety Disorder"),
+    "social_isolation": ("⚪", "Loneliness", "Social Isolation"),
+    "substance_use_disorder": ("🟠", "Substance Use", "Substance Use Disorder"),
+    "suicidal_risk": ("🔴", "Suicidal Risk", "Suicidal Ideation Risk"),
+}
+
+RISK_LABELS = {"suicidal_risk", "substance_use_disorder", "alcohol_use_disorder"}
+SAFE_LABELS = {"non-mental"}
+
+SAMPLE_TEXTS = {
+    "💭 Depression": "I've been feeling really hopeless and can't get out of bed for weeks. Nothing seems to matter anymore and I don't enjoy things I used to love.",
+    "😰 Anxiety": "My heart keeps racing and I can't stop worrying about everything. I feel like something terrible is about to happen all the time.",
+    "🧠 ADHD": "I can never focus on anything for more than a few minutes. My mind just wanders constantly and I forget things all the time. It's affecting my work.",
+    "🟢 Non-mental": "Just finished a great workout at the gym today. Feeling energized and ready to tackle the rest of the week!",
+    "⚠️ Suicidal Risk": "I don't see the point in going on anymore. Everything feels so dark and empty. I just want the pain to stop.",
+}
+
+
+# ── Model version configs ─────────────────────────────────────────────────────
+MODEL_VERSIONS = {
+    "v1.0.1 — Stacking Ensemble": {
+        "key": "v1.0.1",
+        "tag": "stacking",
+        "desc": "TF-IDF (LR + SVC via OOF) + Psych → LightGBM",
+        "accuracy": "81%",
+        "macro_f1": "67%",
+        "features": "~302",
+        "arch_html": """
+            <b style="color:#a5b4fc;">Layer 1</b> — Base Models (OOF)<br>
+            &nbsp;&nbsp;• TF-IDF → LogisticRegression<br>
+            &nbsp;&nbsp;• TF-IDF → LinearSVC<br>
+            &nbsp;&nbsp;• Psychological Features<br><br>
+            <b style="color:#a5b4fc;">Layer 2</b> — Meta-Learner<br>
+            &nbsp;&nbsp;• LightGBM (32 proba + ~270 psych)
+        """,
+        "perf": {
+            "adhd": 0.81, "alcohol_use_disorder": 0.69, "autism_spectrum": 0.69,
+            "bipolar_disorder": 0.55, "borderline_personality": 0.65,
+            "eating_disorder": 0.73, "generalized_anxiety": 0.69,
+            "illness_anxiety": 0.63, "major_depressive": 0.61,
+            "non-mental": 0.95, "ptsd": 0.67, "schizophrenia": 0.66,
+            "social_anxiety": 0.57, "social_isolation": 0.53,
+            "substance_use_disorder": 0.63, "suicidal_risk": 0.64,
+        },
     },
-    {
-        "label": "Generalized Anxiety",
-        "text": (
-            "My heart keeps racing and I can't stop worrying about everything - work, "
-            "money, my health, my relationships. I've been avoiding going out because "
-            "I'm scared something bad will happen. Even small decisions feel completely "
-            "overwhelming and I lie awake most nights running through worst-case scenarios."
-        ),
+    "v1.0.0 — LogisticRegression": {
+        "key": "v1.0.0",
+        "sub": "lr",
+        "tag": "flat",
+        "desc": "TF-IDF + Psych → LogisticRegression (flat)",
+        "accuracy": "79%",
+        "macro_f1": "61%",
+        "features": "~32K",
+        "arch_html": """
+            <b style="color:#fbbf24;">Flat Architecture</b><br><br>
+            &nbsp;&nbsp;• TF-IDF (word + char) + Psych features<br>
+            &nbsp;&nbsp;• FeatureUnion → StandardScaler + MaxAbsScaler<br>
+            &nbsp;&nbsp;• LogisticRegression (Optuna-tuned)
+        """,
+        "perf": {
+            "adhd": 0.81, "alcohol_use_disorder": 0.61, "autism_spectrum": 0.54,
+            "bipolar_disorder": 0.40, "borderline_personality": 0.62,
+            "eating_disorder": 0.66, "generalized_anxiety": 0.66,
+            "illness_anxiety": 0.56, "major_depressive": 0.60,
+            "non-mental": 0.94, "ptsd": 0.57, "schizophrenia": 0.53,
+            "social_anxiety": 0.54, "social_isolation": 0.49,
+            "substance_use_disorder": 0.56, "suicidal_risk": 0.62,
+        },
     },
-    {
-        "label": "ADHD",
-        "text": (
-            "I literally cannot focus on anything for more than five minutes. I forget "
-            "everything, lose my keys constantly, start tasks and never finish them. "
-            "My desk is a disaster and my boss is getting frustrated. I've been this way "
-            "my whole life, not just lately - school was the same way."
-        ),
+    "v1.0.0 — LinearSVC": {
+        "key": "v1.0.0",
+        "sub": "svc",
+        "tag": "flat",
+        "desc": "TF-IDF + Psych → LinearSVC (flat)",
+        "accuracy": "80%",
+        "macro_f1": "62%",
+        "features": "~32K",
+        "arch_html": """
+            <b style="color:#fbbf24;">Flat Architecture</b><br><br>
+            &nbsp;&nbsp;• TF-IDF (word + char) + Psych features<br>
+            &nbsp;&nbsp;• FeatureUnion → StandardScaler + MaxAbsScaler<br>
+            &nbsp;&nbsp;• LinearSVC (Optuna-tuned, softmax calibration)
+        """,
+        "perf": {
+            "adhd": 0.82, "alcohol_use_disorder": 0.61, "autism_spectrum": 0.60,
+            "bipolar_disorder": 0.45, "borderline_personality": 0.66,
+            "eating_disorder": 0.66, "generalized_anxiety": 0.69,
+            "illness_anxiety": 0.57, "major_depressive": 0.58,
+            "non-mental": 0.94, "ptsd": 0.58, "schizophrenia": 0.58,
+            "social_anxiety": 0.56, "social_isolation": 0.50,
+            "substance_use_disorder": 0.55, "suicidal_risk": 0.64,
+        },
     },
-    {
-        "label": "Bipolar Disorder",
-        "text": (
-            "Last week I felt on top of the world - barely sleeping, full of energy, "
-            "signed up for three new projects. This week I can barely get off the couch. "
-            "This happens in cycles and I never know which version of myself I'll wake up as."
-        ),
-    },
-    {
-        "label": "Non-Mental Health",
-        "text": (
-            "Spent the weekend rebuilding my bicycle. Finally got the gear derailleur "
-            "dialled in properly. Planning a 50 km ride next Saturday if the weather holds."
-        ),
-    },
-]
+}
 
 
-# ── Model loading (cached so the heavy pickle loads only once per session) ─────
-@st.cache_resource(show_spinner="Loading model - first load may take 30-60 s...")
-def load_pipeline(data_type: str, model_name: str):
-    """
-    Deserialise the sklearn inference Pipeline and LabelEncoder from disk.
+# ── Load model ────────────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def load_v101():
+    """Load the v1.0.1 stacking inference pipeline."""
+    project_root = str(Path(__file__).parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
-    We cache with @st.cache_resource (not @st.cache_data) because the pipeline
-    contains a spaCy model and other non-serialisable objects that should live
-    in memory as a single shared instance.
-    """
-    artifact_dir = ARTIFACT_CLEAN if data_type == "Cleaned" else ARTIFACT_MASK
-    pipeline_path = artifact_dir / MODEL_FILE_MAP[model_name]
-    le_path = artifact_dir / "label_encoder.pkl"
+    artifact_dir = Path(__file__).parent / "archive" / "v1.0.1"
 
-    missing = [str(p) for p in [pipeline_path, le_path] if not p.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "Missing model artifact(s):\n  " + "\n  ".join(missing) + "\n\n"
-            "Train the models first by running:\n    python main.py"
-        )
+    def _load(name):
+        with open(artifact_dir / name, "rb") as fh:
+            return pickle.load(fh)
 
-    with open(pipeline_path, "rb") as fh:
-        pipeline = pickle.load(fh)
-    with open(le_path, "rb") as fh:
+    return {
+        "le": _load("label_encoder.pkl"),
+        "tfidf": _load("tfidf_pipeline.pkl"),
+        "lr": _load("base_lr.pkl"),
+        "svc": _load("base_svc.pkl"),
+        "psych": _load("psych_extractor.pkl"),
+        "lgbm": _load("meta_lgbm.pkl"),
+    }
+
+
+@st.cache_resource(show_spinner=False)
+def load_v100_lr():
+    """Load the v1.0.0 LR inference pipeline."""
+    artifact_dir = Path(__file__).parent / "archive" / "v1.0.0"
+    with open(artifact_dir / "label_encoder.pkl", "rb") as fh:
         le = pickle.load(fh)
-
-    return pipeline, le
-
-
-# ── Inference ─────────────────────────────────────────────────────────────────
-def predict(pipeline, le, text: str, model_name: str) -> tuple[str, pd.DataFrame]:
-    """
-    Run the inference pipeline on a single text string.
-
-    Returns
-    -------
-    pred_label : str
-        The raw label key (e.g. "major_depressive").
-    results : pd.DataFrame
-        All classes sorted by confidence descending, with columns
-        [label, display, confidence].
-
-    Notes
-    -----
-    LinearSVC has no predict_proba. We use decision_function (raw margin
-    distances from each class hyperplane) and apply softmax to convert them
-    into a [0, 1] range that sums to 1. These are *not* calibrated
-    probabilities - treat them as relative confidence scores for ranking.
-    """
-    # The sklearn pipeline expects an iterable of strings, not a bare string
-    text_input = pd.Series([text])
-    pred_encoded = pipeline.predict(text_input)[0]
-    pred_label = le.inverse_transform([pred_encoded])[0]
-
-    if model_name == "LogisticRegression":
-        scores = pipeline.predict_proba(text_input)[0]
-    else:
-        # LinearSVC -> decision function scores -> softmax normalisation
-        raw = pipeline.decision_function(text_input)[0]
-        scores = softmax(raw)
-
-    results = (
-        pd.DataFrame(
-            {
-                "label": le.classes_,
-                "display": [LABEL_DISPLAY.get(lb, lb) for lb in le.classes_],
-                "confidence": scores,
-            }
-        )
-        .sort_values("confidence", ascending=False)
-        .reset_index(drop=True)
-    )
-
-    return pred_label, results
+    with open(artifact_dir / "inference_pipeline_lr.pkl", "rb") as fh:
+        pipe = pickle.load(fh)
+    return {"le": le, "pipeline": pipe}
 
 
-# ── Chart builder ─────────────────────────────────────────────────────────────
-def build_bar_chart(results: pd.DataFrame, pred_label: str, top_n: int = 10):
-    """
-    Horizontal bar chart of the top-N confidence scores.
+@st.cache_resource(show_spinner=False)
+def load_v100_svc():
+    """Load the v1.0.0 SVC inference pipeline."""
+    artifact_dir = Path(__file__).parent / "archive" / "v1.0.0"
+    with open(artifact_dir / "label_encoder.pkl", "rb") as fh:
+        le = pickle.load(fh)
+    with open(artifact_dir / "inference_pipeline_svc.pkl", "rb") as fh:
+        pipe = pickle.load(fh)
+    return {"le": le, "pipeline": pipe}
 
-    The predicted class is highlighted in a distinct colour so it stands
-    out at a glance.
-    """
-    top = results.head(top_n).copy()
 
-    # Colour: red for crisis, teal for prediction, steel-blue for the rest
-    colors = []
-    for lb in top["label"]:
-        if lb in CRISIS_LABELS and lb == pred_label:
-            colors.append("#EF5350")  # red - crisis + predicted
-        elif lb in CRISIS_LABELS:
-            colors.append("#EF9A9A")  # light red - crisis but not top
-        elif lb == pred_label:
-            colors.append("#00897B")  # teal - predicted class
+def predict(text, version_name):
+    """Unified prediction function for all model versions."""
+    from scipy.special import softmax as sp_softmax
+
+    cfg = MODEL_VERSIONS[version_name]
+
+    if cfg["key"] == "v1.0.1":
+        m = load_v101()
+        texts = [text.lower()]
+        X_tf = m["tfidf"].transform(texts)
+        lr_p = m["lr"].predict_proba(X_tf)
+        svc_p = sp_softmax(m["svc"].decision_function(X_tf), axis=1)
+        psy_p = m["psych"].transform(texts)
+        meta = np.hstack([lr_p, svc_p, psy_p])
+        probas = m["lgbm"].predict_proba(meta)[0]
+        pred_idx = np.argmax(probas)
+        pred_label = m["le"].inverse_transform([pred_idx])[0]
+        proba_dict = dict(zip(m["le"].classes_, probas))
+        return pred_label, proba_dict
+
+    else:  # v1.0.0 flat models
+        if cfg.get("sub") == "svc":
+            m = load_v100_svc()
+            texts = [text]
+            # SVC: decision_function → softmax
+            decision = m["pipeline"].decision_function(texts)
+            probas = sp_softmax(decision, axis=1)[0]
         else:
-            colors.append("#90A4AE")  # neutral grey-blue
+            m = load_v100_lr()
+            texts = [text]
+            probas = m["pipeline"].predict_proba(texts)[0]
 
-    fig = go.Figure(
-        go.Bar(
-            x=top["confidence"],
-            y=top["display"],
-            orientation="h",
-            marker_color=colors,
-            text=[f"{c:.1%}" for c in top["confidence"]],
-            textposition="outside",
-            cliponaxis=False,
-        )
-    )
+        pred_idx = np.argmax(probas)
+        pred_label = m["le"].inverse_transform([pred_idx])[0]
+        proba_dict = dict(zip(m["le"].classes_, probas))
+        return pred_label, proba_dict
 
-    fig.update_layout(
-        xaxis=dict(
-            title="Confidence score",
-            tickformat=".0%",
-            range=[0, min(top["confidence"].max() * 1.25, 1.0)],
-        ),
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=10, r=60, t=10, b=30),
-        height=360,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-    )
-
-    return fig
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# UI
-# ═══════════════════════════════════════════════════════════════════════════════
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("⚙️ Settings")
-
-    st.markdown("#### Classifier")
-    model_name = st.radio(
-        "Model",
-        options=["LinearSVC", "LogisticRegression"],
-        help=(
-            "**LinearSVC** - slightly higher macro F1 (0.62 cleaned / 0.54 masked). "
-            "Confidence scores are derived from decision function + softmax (not calibrated).\n\n"
-            "**LogisticRegression** - native probability output; slightly lower F1 "
-            "but scores are better calibrated."
-        ),
+    st.image(str(Path(__file__).parent / "img" / "logo.png"), width=80)
+    st.markdown("### 🧠 MindScan AI")
+    st.markdown(
+        '<p style="color:#64748b;font-size:0.85rem;">'
+        "Mental Health Text Classification</p>",
+        unsafe_allow_html=True,
     )
-
-    st.markdown("#### Input mode")
-    data_type = st.radio(
-        "Preprocessing",
-        options=["Cleaned", "Masked"],
-        help=(
-            "**Cleaned** - text is cleaned (URLs removed, contractions expanded) "
-            "but MH keywords like *depression*, *anxiety* are kept. "
-            "Use this for real-world text.\n\n"
-            "**Masked** - all MH keywords are replaced with `[MH]` before inference. "
-            "Lower F1 (-8 pp) but tests whether the model learned *language patterns* "
-            "rather than surface keywords."
-        ),
-    )
-
-    st.markdown("#### Load example")
-    example_labels = ["- type your own -"] + [e["label"] for e in EXAMPLE_POSTS]
-    example_choice = st.selectbox("Example posts", options=example_labels)
 
     st.markdown("---")
 
-    # Show metric summary for current selection
-    m = MODEL_METRICS.get((data_type, model_name), {})
-    if m:
-        col_a, col_b = st.columns(2)
-        col_a.metric("Macro F1", f"{m['macro_f1']:.2f}")
-        col_b.metric("Accuracy", f"{m['accuracy']:.0%}")
-        st.caption("Metrics on held-out test set (77,943 posts, 16 classes)")
+    # ── Model version selector ────────────────────────────────────────────────
+    st.markdown("#### 🔄 Model Version")
+    selected_version = st.radio(
+        "Select model",
+        list(MODEL_VERSIONS.keys()),
+        index=0,
+        label_visibility="collapsed",
+    )
+    vcfg = MODEL_VERSIONS[selected_version]
+    tag_cls = "tag-stacking" if vcfg["tag"] == "stacking" else "tag-flat"
+    tag_label = "STACKING" if vcfg["tag"] == "stacking" else "FLAT"
+    st.markdown(
+        f'<p style="color:#64748b;font-size:0.78rem;margin-top:4px;">'
+        f'{vcfg["desc"]} '
+        f'<span class="version-tag {tag_cls}">{tag_label}</span></p>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
-    st.caption(
-        "⚠️ **Research use only.** "
-        "This tool is not a clinical diagnostic instrument and must not be "
-        "used as a substitute for professional mental health assessment."
+    st.markdown("#### 📊 Architecture")
+    st.markdown(
+        f'<div style="color:#94a3b8;font-size:0.82rem;line-height:1.7;">'
+        f'{vcfg["arch_html"]}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
+    st.markdown("#### 🏷️ 16 Categories")
+    for key, (emoji, short, full) in LABEL_INFO.items():
+        st.markdown(
+            f'<span style="font-size:0.8rem;color:#94a3b8;">{emoji} {short}</span>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    st.markdown(
+        '<p style="color:#475569;font-size:0.75rem;text-align:center;">'
+        "Project 2 — UTEHY<br>Reddit Mental Health Dataset</p>",
+        unsafe_allow_html=True,
     )
 
 
-# ── Main panel ────────────────────────────────────────────────────────────────
-st.title("🧠 Mental Health Text Classifier")
+# ── Hero ──────────────────────────────────────────────────────────────────────
 st.markdown(
-    "Classify Reddit-style posts across **16 mental health categories** using a "
-    "traditional ML pipeline combining TF-IDF, character n-grams, and "
-    "psychological features (VADER, Empath, NRC lexicons, POS ratios). "
-    "Trained on the "
-    "[Reddit Mental Health Dataset](https://zenodo.org/records/3941387) (2018-2019)."
+    """
+    <div class="hero">
+        <h1>🧠 MindScan AI</h1>
+        <p>Analyze text for mental health indicators using a two-layer stacking ensemble</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-# Populate textarea from example selector
-default_text = ""
-if example_choice != "- type your own -":
-    matched = next((e for e in EXAMPLE_POSTS if e["label"] == example_choice), None)
-    if matched:
-        default_text = matched["text"]
-
-input_text = st.text_area(
-    "Paste or type a post to classify",
-    value=default_text,
-    height=160,
-    placeholder="e.g. \"I've been feeling really low lately and can't get out of bed...\"",
-)
-
-word_count = len(input_text.split()) if input_text.strip() else 0
-st.caption(f"{word_count} words - minimum recommended: 10")
-
-classify_btn = st.button("▶ Classify", type="primary", disabled=(word_count < 3))
-
-
-# ── Results ───────────────────────────────────────────────────────────────────
-if classify_btn:
-    if word_count < 3:
-        st.warning("Please enter at least a few words.")
+# ── Preload selected model ────────────────────────────────────────────────────
+with st.spinner("🔄 Loading model... (first time may take a moment)"):
+    if vcfg["key"] == "v1.0.1":
+        load_v101()
+    elif vcfg.get("sub") == "svc":
+        load_v100_svc()
     else:
-        try:
-            # Load (or retrieve cached) model
-            pipeline, le = load_pipeline(data_type, model_name)
+        load_v100_lr()
 
-            with st.spinner("Running inference..."):
-                pred_label, results = predict(pipeline, le, input_text, model_name)
+# ── Model metrics row (dynamic) ──────────────────────────────────────────────
+m1, m2, m3, m4 = st.columns(4)
+metrics = [
+    (vcfg["accuracy"], "Accuracy"),
+    (vcfg["macro_f1"], "Macro F1"),
+    ("16", "Categories"),
+    (vcfg["features"], "Features"),
+]
+for col, (val, lab) in zip([m1, m2, m3, m4], metrics):
+    col.markdown(
+        f'<div class="metric-card"><div class="value">{val}</div>'
+        f'<div class="label">{lab}</div></div>',
+        unsafe_allow_html=True,
+    )
 
-            display_name = LABEL_DISPLAY.get(pred_label, pred_label)
-            top_conf = float(results.iloc[0]["confidence"])
-            rank_of_pred = int(results[results["label"] == pred_label].index[0]) + 1
+st.markdown("<br>", unsafe_allow_html=True)
 
-            st.markdown("---")
+# ── Main tabs ─────────────────────────────────────────────────────────────────
+tab1, tab2, tab3 = st.tabs(["🔍 Analyze Text", "📋 Batch Analysis", "ℹ️ About"])
 
-            # ── Prediction banner
-            if pred_label in CRISIS_LABELS:
-                st.error(
-                    f"⚠️ **Predicted class: {display_name}** - confidence {top_conf:.1%}"
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 1: Single text analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab1:
+    col_input, col_result = st.columns([1, 1], gap="large")
+
+    with col_input:
+        st.markdown('<div class="glass">', unsafe_allow_html=True)
+        st.markdown("#### ✍️ Enter Text")
+
+        # Sample selector
+        sample_choice = st.selectbox(
+            "Try a sample:",
+            ["— Custom input —"] + list(SAMPLE_TEXTS.keys()),
+            label_visibility="collapsed",
+        )
+
+        default_text = SAMPLE_TEXTS.get(sample_choice, "")
+        user_text = st.text_area(
+            "Text to analyze",
+            value=default_text,
+            height=180,
+            placeholder="Type or paste text here...",
+            label_visibility="collapsed",
+        )
+
+        analyze_btn = st.button("🔍 Analyze", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_result:
+        if analyze_btn and user_text.strip():
+            with st.spinner("Analyzing..."):
+                pred_label, proba_dict = predict(
+                    user_text, selected_version
                 )
-                st.warning(
-                    "**Crisis resources (Vietnam):** Đường dây hỗ trợ sức khỏe tâm thần "
-                    "**1800 599 920** (miễn phí, 24/7)  \n"
-                    "**International:** [findahelpline.com](https://findahelpline.com)"
-                )
-            elif pred_label == "non-mental":
-                st.success(
-                    f"✅ **Predicted class: {display_name}** "
-                    f"- confidence {top_conf:.1%}"
-                )
+
+            info = LABEL_INFO.get(pred_label, ("❓", pred_label, pred_label))
+            emoji, short_name, full_name = info
+
+            # Badge color
+            if pred_label in RISK_LABELS:
+                badge_cls = "badge-risk"
+            elif pred_label in SAFE_LABELS:
+                badge_cls = "badge-safe"
             else:
-                st.info(
-                    f"🔍 **Predicted class: {display_name}** "
-                    f"- confidence {top_conf:.1%}"
+                badge_cls = "badge-moderate"
+
+            confidence = proba_dict[pred_label] * 100
+
+            st.markdown('<div class="glass">', unsafe_allow_html=True)
+            st.markdown("#### 🎯 Prediction Result")
+            st.markdown(
+                f'<div class="result-badge {badge_cls}">'
+                f"{emoji} {full_name}</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<p style="color:#94a3b8;margin-top:0.5rem;">'
+                f"Confidence: <b style='color:#a5b4fc;'>{confidence:.1f}%</b></p>",
+                unsafe_allow_html=True,
+            )
+
+            # Top 5 probabilities chart
+            sorted_proba = sorted(proba_dict.items(), key=lambda x: -x[1])[:8]
+            labels_top = [LABEL_INFO.get(k, ("", k, k))[1] for k, _ in sorted_proba]
+            values_top = [v * 100 for _, v in sorted_proba]
+
+            colors = [
+                "#6366f1" if i == 0 else "rgba(99,102,241,0.25)"
+                for i in range(len(labels_top))
+            ]
+
+            fig = go.Figure(
+                go.Bar(
+                    x=values_top[::-1],
+                    y=labels_top[::-1],
+                    orientation="h",
+                    marker=dict(
+                        color=colors[::-1],
+                        line=dict(width=0),
+                        cornerradius=6,
+                    ),
+                    text=[f"{v:.1f}%" for v in values_top[::-1]],
+                    textposition="outside",
+                    textfont=dict(color="#94a3b8", size=12),
                 )
+            )
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#94a3b8"),
+                height=300,
+                margin=dict(l=10, r=60, t=10, b=10),
+                xaxis=dict(
+                    showgrid=False, showticklabels=False, zeroline=False, range=[0, max(values_top) * 1.3]
+                ),
+                yaxis=dict(showgrid=False),
+                bargap=0.3,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Body: chart + table side by side
-            col_chart, col_table = st.columns([3, 2], gap="large")
-
-            with col_chart:
-                st.subheader("Top-10 confidence scores")
-                fig = build_bar_chart(results, pred_label, top_n=10)
-                st.plotly_chart(fig, use_container_width=True)
-
-                # Soft calibration warning for LinearSVC
-                if model_name == "LinearSVC":
-                    st.caption(
-                        "ℹ️ LinearSVC scores are derived via softmax on decision-function "
-                        "margins - not calibrated probabilities. Use for ranking only."
+            # Full probability breakdown
+            with st.expander("📊 Full Probability Breakdown"):
+                for label, prob in sorted(proba_dict.items(), key=lambda x: -x[1]):
+                    info = LABEL_INFO.get(label, ("❓", label, label))
+                    bar_width = prob * 100
+                    color = "#6366f1" if label == pred_label else "#334155"
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;margin:4px 0;">'
+                        f'<span style="color:#94a3b8;width:140px;font-size:0.8rem;">{info[0]} {info[1]}</span>'
+                        f'<div style="flex:1;background:#1e293b;border-radius:6px;height:20px;margin:0 8px;">'
+                        f'<div style="width:{bar_width}%;background:{color};height:100%;border-radius:6px;'
+                        f'transition:width 0.5s;"></div></div>'
+                        f'<span style="color:#64748b;font-size:0.8rem;width:50px;">{prob:.3f}</span>'
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
 
-            with col_table:
-                st.subheader("Full class ranking")
-                tbl = results[["display", "confidence"]].copy()
-                tbl.columns = ["Class", "Score"]
-                tbl["Score"] = tbl["Score"].map("{:.2%}".format)
-                tbl.index = range(1, len(tbl) + 1)
+        elif analyze_btn:
+            st.warning("Please enter some text to analyze.")
+        else:
+            st.markdown('<div class="glass">', unsafe_allow_html=True)
+            st.markdown("#### 🎯 Results")
+            st.markdown(
+                '<p style="color:#64748b;text-align:center;padding:3rem 0;">'
+                "Enter text and click <b>Analyze</b> to see results</p>",
+                unsafe_allow_html=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
 
-                # Highlight predicted row
-                def highlight_pred(row):
-                    label_key = results.iloc[row.name - 1]["label"]
-                    if label_key == pred_label:
-                        return ["background-color: #e3f2fd; font-weight: bold"] * 2
-                    return [""] * 2
 
-                st.dataframe(
-                    tbl.style.apply(highlight_pred, axis=1),
-                    use_container_width=True,
-                    height=380,
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 2: Batch analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown("#### 📋 Batch Text Analysis")
+    st.markdown(
+        '<p style="color:#64748b;font-size:0.9rem;">Enter multiple texts, one per line.</p>',
+        unsafe_allow_html=True,
+    )
+
+    batch_text = st.text_area(
+        "Batch input",
+        height=200,
+        placeholder="Line 1: I feel so anxious all the time...\nLine 2: Had a great day at work today!\nLine 3: I can't stop thinking about death...",
+        label_visibility="collapsed",
+    )
+
+    if st.button("🚀 Analyze Batch", use_container_width=True):
+        lines = [l.strip() for l in batch_text.strip().split("\n") if l.strip()]
+        if lines:
+            results = []
+            progress = st.progress(0)
+            for i, line in enumerate(lines):
+                pred_label, proba_dict = predict(line, selected_version)
+                conf = proba_dict[pred_label]
+                info = LABEL_INFO.get(pred_label, ("❓", pred_label, pred_label))
+                results.append(
+                    {
+                        "Text": line[:80] + ("..." if len(line) > 80 else ""),
+                        "Prediction": f"{info[0]} {info[1]}",
+                        "Confidence": f"{conf:.1%}",
+                        "Label": pred_label,
+                    }
                 )
+                progress.progress((i + 1) / len(lines))
 
-            # ── Confidence note
-            st.markdown("---")
-            if top_conf < 0.40:
-                st.warning(
-                    f"Low confidence ({top_conf:.1%}) - the model is uncertain. "
-                    "Consider that the text may exhibit overlapping signals from "
-                    "multiple categories, or may be too short for reliable classification."
-                )
+            progress.empty()
 
-            # ── Footer metadata
-            metrics = MODEL_METRICS.get((data_type, model_name), {})
-            macro_f1 = metrics.get("macro_f1", "-")
-            accuracy = metrics.get("accuracy", "-")
-            n_classes = len(le.classes_)
-
-            st.caption(
-                f"Model: **{model_name}** * "
-                f"Mode: **{data_type}** * "
-                f"Test-set macro F1: **{macro_f1}** * "
-                f"Test-set accuracy: **{accuracy:.0%}** * "
-                f"Classes: **{n_classes}**"
+            import pandas as pd
+            df = pd.DataFrame(results)
+            st.dataframe(
+                df[["Text", "Prediction", "Confidence"]],
+                use_container_width=True,
+                hide_index=True,
             )
 
-        except FileNotFoundError as exc:
-            st.error("**Model files not found.**")
-            st.code(str(exc), language="text")
-            st.info(
-                "Run `python main.py` to train the models first, then restart this app."
+            # Distribution chart
+            label_counts = pd.Series([r["Label"] for r in results]).value_counts()
+            display_labels = [LABEL_INFO.get(l, ("", l, l))[1] for l in label_counts.index]
+
+            fig2 = go.Figure(
+                go.Pie(
+                    labels=display_labels,
+                    values=label_counts.values,
+                    hole=0.5,
+                    marker=dict(
+                        colors=[
+                            "#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd",
+                            "#60a5fa", "#38bdf8", "#34d399", "#fbbf24",
+                            "#f472b6", "#fb923c", "#94a3b8", "#64748b",
+                        ]
+                    ),
+                    textfont=dict(color="white", size=12),
+                )
             )
+            fig2.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter", color="#94a3b8"),
+                height=350,
+                margin=dict(l=20, r=20, t=30, b=20),
+                legend=dict(font=dict(color="#94a3b8")),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.warning("Please enter at least one line of text.")
 
-        except Exception as exc:
-            st.error(f"Inference failed: {exc}")
-            with st.expander("Full traceback"):
-                st.exception(exc)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ── Info expander - dataset & model overview ──────────────────────────────────
-with st.expander("ℹ️ About the dataset and model", expanded=False):
-    st.markdown("""
-**Dataset:** [Reddit Mental Health Dataset](https://zenodo.org/records/3941387)
-(Cohan et al., 2018-2019). Posts scraped from 16 MH subreddits + 11 control subreddits.
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 3: About
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab3:
+    c1, c2 = st.columns(2)
 
-**Labels:** The subreddit a post was found in is used as a proxy label
-(e.g. r/depression -> `major_depressive`). These are *self-reported* community memberships,
-not clinical diagnoses - a known limitation of the dataset.
+    with c1:
+        st.markdown('<div class="glass">', unsafe_allow_html=True)
+        st.markdown(f"#### 🏗️ Architecture — {selected_version}")
+        st.markdown(
+            f'<div style="color:#94a3b8;font-size:0.9rem;line-height:1.8;">'
+            f'{vcfg["arch_html"]}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-**Pipeline overview:**
+        # Comparison table
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("##### 🔀 Version Comparison")
+        import pandas as pd
+        comp_data = []
+        for vname, vc in MODEL_VERSIONS.items():
+            comp_data.append({
+                "Model": vname,
+                "Type": vc["tag"].upper(),
+                "Accuracy": vc["accuracy"],
+                "Macro F1": vc["macro_f1"],
+            })
+        st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-| Stage | Detail |
-|---|---|
-| Noise filter | Remove deleted/short/bot/moderator posts |
-| Clinical filter | Keep posts with high first-person ratio or self-disclosure patterns |
-| Features | TF-IDF word (1-2 gram) + char (3-5 gram) + VADER + Empath + NRC lexicons + POS ratios |
-| Resampling | Random under-sampling (max 15 k per class) |
-| Tuning | Optuna (30 trials, 3-fold CV, macro F1) |
-| Models | LinearSVC * LogisticRegression |
+    with c2:
+        st.markdown('<div class="glass">', unsafe_allow_html=True)
+        st.markdown("#### 📈 Performance")
 
-**Known limitations:**
-- Subreddit membership != clinical diagnosis (noisy labels)
-- Data from 2018-2019 Reddit; community language may have shifted
-- Random post-level split may include the same user in train and test sets
-- Masking experiment shows ~8 pp macro F1 drop, indicating reliance on surface keywords
-    """)
+        perf_data = vcfg["perf"]
+        perf_labels = [LABEL_INFO.get(k, ("", k, k))[1] for k in perf_data]
+        perf_values = list(perf_data.values())
+
+        fig3 = go.Figure(
+            go.Bar(
+                x=perf_values,
+                y=perf_labels,
+                orientation="h",
+                marker=dict(
+                    color=perf_values,
+                    colorscale=[[0, "#ef4444"], [0.5, "#f59e0b"], [1, "#10b981"]],
+                    cornerradius=5,
+                ),
+                text=[f"{v:.0%}" for v in perf_values],
+                textposition="outside",
+                textfont=dict(color="#94a3b8", size=11),
+            )
+        )
+        fig3.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="Inter", color="#94a3b8", size=11),
+            height=500,
+            margin=dict(l=10, r=50, t=10, b=10),
+            xaxis=dict(showgrid=False, showticklabels=False, zeroline=False, range=[0, 1.15]),
+            yaxis=dict(showgrid=False, autorange="reversed"),
+            bargap=0.25,
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown("#### 📚 Dataset")
+    st.markdown(
+        """
+        <div style="color:#94a3b8;font-size:0.9rem;line-height:1.7;">
+        <b style="color:#a5b4fc;">Reddit Mental Health Dataset</b>
+        (<a href="https://zenodo.org/records/3941387" style="color:#60a5fa;">Zenodo</a>)<br><br>
+        • <b>15</b> mental health subreddits (r/depression, r/anxiety, r/adhd, ...)<br>
+        • <b>11</b> non-mental health subreddits as control group<br>
+        • Preprocessing: noise filtering, clinical relevance filtering, MH keyword masking<br>
+        • Train/test split: 85/15 with stratification + undersampling
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <div style="text-align:center;padding:2rem;color:#475569;font-size:0.8rem;">
+        ⚠️ <b>Disclaimer</b>: This tool is for educational and research purposes only.
+        It is NOT a substitute for professional mental health diagnosis or treatment.
+        If you or someone you know is in crisis, please contact a mental health professional.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
