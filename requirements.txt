@@ -25,3 +25,4 @@ lightgbm>=4.6.0,<5
 optuna>=4.8.0,<5
 plotly>=6.6.0,<7
 contractions
+huggingface-hub

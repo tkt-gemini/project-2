@@ -20,8 +20,6 @@ st.set_page_config(
 )
 
 # ── Hằng số và Bảng màu biểu đồ ───────────────────────────────────────────────
-ARTIFACT_DIR = Path("./archive/v1.0.1")
-
 LABEL_DISPLAY = {
     "adhd": "ADHD",
     "alcohol_use_disorder": "Alcohol Use Disorder",
@@ -168,26 +166,44 @@ hr.thin { border: none; border-top: 1px solid #E5E7EB; margin: 1.5rem 0; }
 
 
 # ── Bộ tải Mô hình (Model Loader) ─────────────────────────────────────────────
-@st.cache_resource(show_spinner="Loading model artifacts…")
-def load_pipeline():
-    d = ARTIFACT_DIR
-    if not d.exists():
-        return None, f"Model directory `{d}` does not exist."
+HF_REPO_ID = "tkt-gemini/mh-classifier-v1"
 
-    required = [
-        "label_encoder.pkl",
-        "tfidf_pipeline.pkl",
-        "base_lr.pkl",
-        "base_svc.pkl",
-        "psych_extractor.pkl",
-        "meta_lgbm.pkl",
-    ]
-    missing = [name for name in required if not (d / name).exists()]
-    if missing:
-        return None, f"Missing model artifact(s): {', '.join(missing)}"
+ARTIFACT_DIR = Path("./archive/v1.0.1")
+
+REQUIRED_FILES = [
+    "label_encoder.pkl",
+    "tfidf_pipeline.pkl",
+    "base_lr.pkl",
+    "base_svc.pkl",
+    "psych_extractor.pkl",
+    "meta_lgbm.pkl",
+]
+
+
+def download_artifacts():
+    """Tải model files từ Hugging Face nếu chưa có trên máy."""
+    from huggingface_hub import hf_hub_download
+
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    for filename in REQUIRED_FILES:
+        dest = ARTIFACT_DIR / filename
+        if not dest.exists():
+            hf_hub_download(
+                repo_id=HF_REPO_ID,
+                filename=filename,
+                local_dir=str(ARTIFACT_DIR),
+            )
+
+
+@st.cache_resource(show_spinner="Downloading & loading model artifacts…")
+def load_pipeline():
+    try:
+        download_artifacts()
+    except Exception as exc:
+        return None, f"Không thể tải model từ Hugging Face: {exc}"
 
     def _load(name):
-        with open(d / name, "rb") as fh:
+        with open(ARTIFACT_DIR / name, "rb") as fh:
             return pickle.load(fh)
 
     try:
@@ -251,10 +267,10 @@ Two-layer stacking ensemble.<br><br>
     st.markdown("---")
     st.markdown("**Try a sample**")
     sample_labels = [
-        "🟠 Hopelessness / Depression",
-        "🔴 Mood swings (Bipolar)",
-        "🟢 Neutral / Non-mental",
-        "🟣 Trauma / PTSD",
+        "🟠 Depression",
+        "🔴 Bipolar",
+        "🟢 Non-mental",
+        "🟣 PTSD",
     ]
     selected = st.selectbox(
         "Load example text",
