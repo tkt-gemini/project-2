@@ -4,11 +4,11 @@
 
 # Project-2
 
-**A README template to jumpstart your projects!**
+**Psychological Text Classification using NLP**
 
 **[Explore the docs »](https://github.com/tkt-gemini/project-2)**
 
-[View Demo]() ·
+[View Demo](https://psych-classification-tkt.streamlit.app) ·
 [Evaluation Report](https://github.com/tkt-gemini/project-2)
 </div>
 
