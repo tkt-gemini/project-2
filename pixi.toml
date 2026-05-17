@@ -9,6 +9,7 @@ version = "0.1.0"
 cuda = "12.8"
 
 [tasks]
+app = "streamlit run app.py"
 
 [dependencies]
 python = "3.12.*"
