@@ -1,6 +1,6 @@
 pandas
 imbalanced-learn
-numpy==2.4.3
+numpy==2.4.5
 nltk
 matplotlib
 wordcloud
