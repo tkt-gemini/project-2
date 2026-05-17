@@ -42,3 +42,4 @@ plotly = ">=6.6.0,<7"
 
 [pypi-dependencies]
 contractions = "*"
+huggingface-hub = "*"
